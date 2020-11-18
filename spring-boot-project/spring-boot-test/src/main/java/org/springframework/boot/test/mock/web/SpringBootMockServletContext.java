@@ -20,6 +20,7 @@ import java.io.File;
 import java.io.IOException;
 import java.net.MalformedURLException;
 import java.net.URL;
+import java.nio.file.Files;
 
 import org.springframework.core.io.FileSystemResourceLoader;
 import org.springframework.core.io.Resource;
@@ -41,7 +42,7 @@ public class SpringBootMockServletContext extends MockServletContext {
 
 	private final ResourceLoader resourceLoader;
 
-	private File emptyRootDirectory;
+	private File emptyRootFolder;
 
 	public SpringBootMockServletContext(String resourceBasePath) {
 		this(resourceBasePath, new FileSystemResourceLoader());
@@ -91,16 +92,14 @@ public class SpringBootMockServletContext extends MockServletContext {
 			// Liquibase assumes that "/" always exists, if we don't have a directory
 			// use a temporary location.
 			try {
-				if (this.emptyRootDirectory == null) {
+				if (this.emptyRootFolder == null) {
 					synchronized (this) {
-						File tempDirectory = File.createTempFile("spr", "servlet");
-						tempDirectory.delete();
-						tempDirectory.mkdirs();
-						tempDirectory.deleteOnExit();
-						this.emptyRootDirectory = tempDirectory;
+						File tempFolder = Files.createTempDirectory("spr-servlet").toFile();
+						tempFolder.deleteOnExit();
+						this.emptyRootFolder = tempFolder;
 					}
 				}
-				return this.emptyRootDirectory.toURI().toURL();
+				return this.emptyRootFolder.toURI().toURL();
 			}
 			catch (IOException ex) {
 				// Ignore

@@ -19,12 +19,13 @@ package org.springframework.boot.rsocket.netty;
 import java.net.InetSocketAddress;
 import java.time.Duration;
 import java.util.Arrays;
-import java.util.concurrent.Callable;
 
 import io.netty.buffer.PooledByteBufAllocator;
+import io.rsocket.AbstractRSocket;
 import io.rsocket.ConnectionSetupPayload;
 import io.rsocket.Payload;
 import io.rsocket.RSocket;
+import io.rsocket.RSocketFactory;
 import io.rsocket.SocketAcceptor;
 import io.rsocket.transport.netty.client.WebsocketClientTransport;
 import io.rsocket.util.DefaultPayload;
@@ -36,6 +37,7 @@ import reactor.core.publisher.Mono;
 
 import org.springframework.boot.rsocket.server.RSocketServer;
 import org.springframework.boot.rsocket.server.RSocketServerCustomizer;
+import org.springframework.boot.rsocket.server.ServerRSocketFactoryProcessor;
 import org.springframework.core.codec.CharSequenceEncoder;
 import org.springframework.core.codec.StringDecoder;
 import org.springframework.core.io.buffer.NettyDataBufferFactory;
@@ -81,19 +83,18 @@ class NettyRSocketServerFactoryTests {
 	}
 
 	private NettyRSocketServerFactory getFactory() {
-		return new NettyRSocketServerFactory();
+		NettyRSocketServerFactory factory = new NettyRSocketServerFactory();
+		factory.setPort(0);
+		return factory;
 	}
 
 	@Test
 	void specificPort() {
 		NettyRSocketServerFactory factory = getFactory();
-		int specificPort = doWithRetry(() -> {
-			int port = SocketUtils.findAvailableTcpPort(41000);
-			factory.setPort(port);
-			this.server = factory.create(new EchoRequestResponseAcceptor());
-			this.server.start();
-			return port;
-		});
+		int specificPort = SocketUtils.findAvailableTcpPort(41000);
+		factory.setPort(specificPort);
+		this.server = factory.create(new EchoRequestResponseAcceptor());
+		this.server.start();
 		this.requester = createRSocketTcpClient();
 		String payload = "test payload";
 		String response = this.requester.route("test").data(payload).retrieveMono(String.class).block(TIMEOUT);
@@ -120,29 +121,32 @@ class NettyRSocketServerFactoryTests {
 		ReactorResourceFactory resourceFactory = new ReactorResourceFactory();
 		resourceFactory.afterPropertiesSet();
 		factory.setResourceFactory(resourceFactory);
+		int specificPort = SocketUtils.findAvailableTcpPort(41000);
+		factory.setPort(specificPort);
 		this.server = factory.create(new EchoRequestResponseAcceptor());
 		this.server.start();
 		this.requester = createRSocketWebSocketClient();
 		String payload = "test payload";
 		String response = this.requester.route("test").data(payload).retrieveMono(String.class).block(TIMEOUT);
 		assertThat(response).isEqualTo(payload);
+		assertThat(this.server.address().getPort()).isEqualTo(specificPort);
 	}
 
 	@Test
-	@Deprecated
+	@SuppressWarnings("deprecation")
 	void serverProcessors() {
 		NettyRSocketServerFactory factory = getFactory();
-		org.springframework.boot.rsocket.server.ServerRSocketFactoryProcessor[] processors = new org.springframework.boot.rsocket.server.ServerRSocketFactoryProcessor[2];
+		ServerRSocketFactoryProcessor[] processors = new ServerRSocketFactoryProcessor[2];
 		for (int i = 0; i < processors.length; i++) {
-			processors[i] = mock(org.springframework.boot.rsocket.server.ServerRSocketFactoryProcessor.class);
-			given(processors[i].process(any(io.rsocket.RSocketFactory.ServerRSocketFactory.class)))
+			processors[i] = mock(ServerRSocketFactoryProcessor.class);
+			given(processors[i].process(any(RSocketFactory.ServerRSocketFactory.class)))
 					.will((invocation) -> invocation.getArgument(0));
 		}
 		factory.setSocketFactoryProcessors(Arrays.asList(processors));
 		this.server = factory.create(new EchoRequestResponseAcceptor());
 		InOrder ordered = inOrder((Object[]) processors);
-		for (org.springframework.boot.rsocket.server.ServerRSocketFactoryProcessor processor : processors) {
-			ordered.verify(processor).process(any(io.rsocket.RSocketFactory.ServerRSocketFactory.class));
+		for (ServerRSocketFactoryProcessor processor : processors) {
+			ordered.verify(processor).process(any(RSocketFactory.ServerRSocketFactory.class));
 		}
 	}
 
@@ -182,28 +186,17 @@ class NettyRSocketServerFactoryTests {
 		return RSocketRequester.builder().rsocketStrategies(strategies);
 	}
 
-	private <T> T doWithRetry(Callable<T> action) {
-		Exception lastFailure = null;
-		for (int i = 0; i < 10; i++) {
-			try {
-				return action.call();
-			}
-			catch (Exception ex) {
-				lastFailure = ex;
-			}
-		}
-		throw new IllegalStateException("Action was not successful in 10 attempts", lastFailure);
-	}
-
 	static class EchoRequestResponseAcceptor implements SocketAcceptor {
 
 		@Override
 		public Mono<RSocket> accept(ConnectionSetupPayload setupPayload, RSocket rSocket) {
-			return Mono.just(new RSocket() {
+			return Mono.just(new AbstractRSocket() {
+
 				@Override
 				public Mono<Payload> requestResponse(Payload payload) {
 					return Mono.just(DefaultPayload.create(payload));
 				}
+
 			});
 		}
 

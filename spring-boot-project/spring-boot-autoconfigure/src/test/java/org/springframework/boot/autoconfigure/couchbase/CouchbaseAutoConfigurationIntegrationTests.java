@@ -18,21 +18,26 @@ package org.springframework.boot.autoconfigure.couchbase;
 
 import java.time.Duration;
 
-import com.couchbase.client.core.diagnostics.ClusterState;
-import com.couchbase.client.core.diagnostics.DiagnosticsResult;
 import com.couchbase.client.java.Bucket;
 import com.couchbase.client.java.Cluster;
-import com.couchbase.client.java.env.ClusterEnvironment;
+import com.couchbase.client.java.CouchbaseBucket;
+import com.couchbase.client.java.cluster.ClusterInfo;
+import com.couchbase.client.java.env.CouchbaseEnvironment;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.couchbase.BucketDefinition;
 import org.testcontainers.couchbase.CouchbaseContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
-import org.springframework.boot.autoconfigure.AutoConfigurations;
-import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.boot.test.util.TestPropertyValues;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
 
 /**
  * Integration tests for {@link CouchbaseAutoConfiguration}.
@@ -50,22 +55,57 @@ class CouchbaseAutoConfigurationIntegrationTests {
 			.withStartupAttempts(5).withStartupTimeout(Duration.ofMinutes(10))
 			.withBucket(new BucketDefinition(BUCKET_NAME).withPrimaryIndex(false));
 
-	private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()
-			.withConfiguration(AutoConfigurations.of(CouchbaseAutoConfiguration.class))
-			.withPropertyValues("spring.couchbase.connection-string: " + couchbase.getConnectionString(),
-					"spring.couchbase.username:spring", "spring.couchbase.password:password",
-					"spring.couchbase.bucket.name:" + BUCKET_NAME);
+	private AnnotationConfigApplicationContext context;
+
+	@BeforeEach
+	void setUp() {
+		this.context = new AnnotationConfigApplicationContext();
+		this.context.register(CouchbaseAutoConfiguration.class);
+		TestPropertyValues.of("spring.couchbase.bootstrap-hosts=" + couchbase.getContainerIpAddress(),
+				"spring.couchbase.env.bootstrap.http-direct-port:" + couchbase.getMappedPort(8091),
+				"spring.couchbase.username:spring", "spring.couchbase.password:password",
+				"spring.couchbase.bucket.name:" + BUCKET_NAME).applyTo(this.context.getEnvironment());
+	}
+
+	@AfterEach
+	void close() {
+		if (this.context != null) {
+			this.context.close();
+		}
+	}
 
 	@Test
 	void defaultConfiguration() {
-		this.contextRunner.run((context) -> {
-			assertThat(context).hasSingleBean(Cluster.class).hasSingleBean(ClusterEnvironment.class);
-			Cluster cluster = context.getBean(Cluster.class);
-			Bucket bucket = cluster.bucket(BUCKET_NAME);
-			bucket.waitUntilReady(Duration.ofMinutes(5));
-			DiagnosticsResult diagnostics = cluster.diagnostics();
-			assertThat(diagnostics.state()).isEqualTo(ClusterState.ONLINE);
-		});
+		this.context.refresh();
+		assertThat(this.context.getBeansOfType(Cluster.class)).hasSize(1);
+		assertThat(this.context.getBeansOfType(ClusterInfo.class)).hasSize(1);
+		assertThat(this.context.getBeansOfType(CouchbaseEnvironment.class)).hasSize(1);
+		assertThat(this.context.getBeansOfType(Bucket.class)).hasSize(1);
+	}
+
+	@Test
+	void customConfiguration() {
+		this.context.register(CustomConfiguration.class);
+		this.context.refresh();
+		assertThat(this.context.getBeansOfType(Cluster.class)).hasSize(2);
+		assertThat(this.context.getBeansOfType(ClusterInfo.class)).hasSize(1);
+		assertThat(this.context.getBeansOfType(CouchbaseEnvironment.class)).hasSize(1);
+		assertThat(this.context.getBeansOfType(Bucket.class)).hasSize(2);
+	}
+
+	@Configuration(proxyBeanMethods = false)
+	static class CustomConfiguration {
+
+		@Bean
+		Cluster myCustomCouchbaseCluster() {
+			return mock(Cluster.class);
+		}
+
+		@Bean
+		Bucket myCustomCouchbaseClient() {
+			return mock(CouchbaseBucket.class);
+		}
+
 	}
 
 }
